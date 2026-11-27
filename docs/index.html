@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Winter Night</title>
+<style>
+:root{--ink:#eef3ff;--muted:#a9b6d6;--glass:rgba(8,12,30,.55);--line:rgba(180,200,255,.22);--accent:#ffd36b}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#04060f;color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;-webkit-tap-highlight-color:transparent}
+canvas{position:fixed;inset:0;display:block;width:100%;height:100%;touch-action:manipulation}
+.bar{position:fixed;left:0;right:0;bottom:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;background:linear-gradient(to top,rgba(4,6,15,.94),rgba(4,6,15,.75) 55%,rgba(4,6,15,0));padding-top:34px;pointer-events:none}
+.bar>*{pointer-events:auto}
+.hello{min-width:210px;font-size:1.25rem;font-weight:600;letter-spacing:.02em;text-shadow:0 0 14px rgba(255,211,107,.55);transition:opacity .6s}
+.hello small{display:block;font-size:.8rem;font-weight:400;color:var(--muted);text-shadow:none;letter-spacing:.04em}
+.count{font-variant-numeric:tabular-nums;font-size:1rem;color:var(--ink);text-shadow:0 0 10px rgba(0,0,0,.8)}
+.count b{color:var(--accent);font-weight:600}
+.panel{position:fixed;top:10px;right:10px;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.panel .body{display:none;flex-direction:column;gap:9px;background:var(--glass);border:1px solid var(--line);border-radius:14px;padding:12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);min-width:220px}
+.panel.open .body{display:flex}
+button,select,input[type=range]{font:inherit}
+.btn{border:1px solid var(--line);background:var(--glass);color:var(--ink);border-radius:999px;padding:8px 14px;cursor:pointer;font-size:.88rem;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.btn:hover,.btn:focus-visible{border-color:var(--accent);outline:none}
+.btn.on{border-color:var(--accent);color:var(--accent)}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;font-size:.85rem;color:var(--muted)}
+.row input[type=range]{width:120px;accent-color:var(--accent)}
+.row select{background:rgba(255,255,255,.08);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:3px 6px}
+.row select option{color:#000}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+.status{font-size:.8rem;color:var(--accent);min-height:1.1em}
+.hint{position:fixed;left:50%;top:14px;transform:translateX(-50%);font-size:.85rem;color:var(--muted);background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:6px 14px;transition:opacity 1s;pointer-events:none;white-space:nowrap;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.hide-ui .bar,.hide-ui .hint,.hide-ui .panel .body{display:none}
+@media (max-width:560px){.hello{font-size:1.05rem}.hint{font-size:.78rem;top:62px}}
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="Animated winter night scene made of text characters: a Christmas tree, falling snow, a changing moon and fireworks" role="img"></canvas>
+
+<div class="hint" id="hint">Tap the sky to launch fireworks</div>
+
+<div class="panel" id="panel">
+  <button class="btn" id="menu" aria-expanded="false" aria-controls="body">Settings</button>
+  <div class="body" id="body">
+    <label class="row">Snow <input type="range" id="snow" min="0" max="100" value="60"></label>
+    <label class="row">Wind <input type="range" id="wind" min="-100" max="100" value="25"></label>
+    <label class="row">Style <select id="style"><option value="0">Text</option><option value="1">Pixels</option></select></label>
+    <label class="row">Aurora <select id="aurora"><option value="1">On</option><option value="0">Off</option></select></label>
+    <div class="btns">
+      <button class="btn" id="moon">Change moon</button>
+      <button class="btn" id="auto">Auto fireworks: on</button>
+      <button class="btn" id="save">Save image</button>
+      <button class="btn" id="rec">Record 10 s video</button>
+      <button class="btn" id="clean">Hide controls</button>
+    </div>
+    <div class="status" id="status" role="status"></div>
+  </div>
+</div>
+
+<div class="bar">
+  <div class="hello" id="hello"><span id="hw">С Новым годом!</span><small id="hs">Happy New Year</small></div>
+  <div class="count" id="count"></div>
+  <button class="btn" id="boom">Fireworks</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const cv = $("scene"), ctx = cv.getContext("2d", { alpha: false });
+  const off = document.createElement("canvas"), octx = off.getContext("2d");
+  const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const mix = (a, b, t) => a + (b - a) * t;
+  const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+  // ---------- small deterministic helpers
+  function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function h2(a, b) { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+  function vn(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const a = h2(xi, yi), b = h2(xi + 1, yi), c = h2(xi, yi + 1), d = h2(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  }
+
+  // ---------- state
+  const state = { snow: 0.6, wind: 0.25, style: 0, aurora: 1, auto: true, moonIdx: 0, moonStart: 0 };
+  const MOONS = [[0.80, 0.89, 1.0], [1.0, 0.70, 0.42], [0.79, 0.66, 1.0], [1.0, 0.89, 0.48], [0.56, 0.94, 0.88], [1.0, 0.56, 0.66]];
+  const FW = [[1, .35, .35], [1, .8, .3], [.4, .8, 1], [.7, .5, 1], [.4, 1, .6], [1, .55, .85], [1, 1, 1]];
+  const BAUBLE = [[.95, .15, .2], [1, .8, .25], [.35, .6, 1], [.95, .95, 1], [1, .45, .75]];
+  const LIGHTS = [[1, .9, .55], [1, .45, .55], [.5, .75, 1], [1, .85, .3], [.6, 1, .7]];
+  const RAMP = [".,'`", ":;-~", "+=*x", "o0#%&", "@8M$W"];
+
+  // ---------- geometry of the scene (world units: 1 = scene height S; y grows downward)
+  const TOP = 0.17, BOT = 0.84, TIERS = 5;
+  let dpr = 1, cssW = 0, cssH = 0, cols = 0, rows = 0, cwC = 0, chC = 0, fs = 0, S = 1, asp = 1, top0 = 0;
+  let R, G, B, LV, DN, KD, CH;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cssW = window.innerWidth; cssH = window.innerHeight;
+    cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
+    cols = cssW < 560 ? 70 : cssW < 1000 ? 110 : 150;
+    cwC = cssW / cols; chC = cwC * 1.7; rows = Math.ceil(cssH / chC); fs = chC * 0.98;
+    S = Math.min(cssH, cssW * 1.25); asp = cssW / S; top0 = cssH - S;
+    const n = cols * rows; R = new Float32Array(n); G = new Float32Array(n); B = new Float32Array(n);
+    LV = new Float32Array(n); DN = new Float32Array(n); KD = new Uint8Array(n); CH = new Uint16Array(n);
+    off.width = Math.max(8, Math.round(cv.width / 5)); off.height = Math.max(8, Math.round(cv.height / 5));
+    initFlakes();
+  }
+
+  // ---------- tree shape and decorations
+  function tierF(t) { const tt = t * TIERS; return tt - Math.floor(tt); }
+  function hw(t) { return (0.04 + 0.27 * t) * (0.74 + 0.26 * tierF(t)); }
+  const rng = mulberry(2027);
+  const baubles = [], lights = [];
+  for (let i = 0; i < 46; i++) baubles.push({ u: (rng() * 1.6 - 0.8), t: 0.1 + rng() * 0.85, c: BAUBLE[i % 5], r: 0.019 + rng() * 0.01, ph: rng() * 6.28 });
+  for (let g = 0; g < 4; g++) for (let k = 0; k < 20; k++) lights.push({ g, k, t: 0.12 + 0.84 * (k / 19) });
+  const GIFTS = [ // dx from centre, width, height, body, ribbon, bottom
+    { dx: -0.40, w: 0.10, h: 0.075, b: [.2, .45, .95], r: [1, 1, 1], y: 0.94 },
+    { dx: -0.30, w: 0.12, h: 0.095, b: [.85, .12, .15], r: [1, .85, .3], y: 0.975 },
+    { dx: -0.19, w: 0.085, h: 0.12, b: [1, .78, .25], r: [.85, .12, .15], y: 0.95 },
+    { dx: 0.19, w: 0.13, h: 0.085, b: [.95, .95, 1], r: [.85, .12, .15], y: 0.965 },
+    { dx: 0.31, w: 0.10, h: 0.105, b: [.85, .12, .15], r: [1, .85, .3], y: 0.975 },
+    { dx: 0.41, w: 0.08, h: 0.07, b: [.3, .75, .5], r: [1, 1, 1], y: 0.94 },
+  ];
+
+  // ---------- snow
+  let flakes = [];
+  function initFlakes() {
+    const n = Math.round(cols * rows * 0.085 * (reduce ? 0.4 : 1));
+    flakes = [];
+    for (let i = 0; i < n; i++) flakes.push({ x: Math.random() * asp * 1.2 - 0.1 * asp, y: -0.9 + Math.random() * 1.9, z: 0.25 + Math.random() * 0.75, ph: Math.random() * 6.28 });
+  }
+
+  // ---------- fireworks
+  let bursts = [], lastAuto = 0;
+  function launch(wx, wy) {
+    const kind = Math.random();
+    bursts.push({ x: wx, y: wy, t0: performance.now() / 1000, rocket: 0.7, color: FW[Math.floor(Math.random() * FW.length)],
+      color2: FW[Math.floor(Math.random() * FW.length)], shape: kind < 0.6 ? 0 : kind < 0.8 ? 1 : 2, n: 64 + Math.floor(Math.random() * 30), sx: wx });
+  }
+
+  // ---------- cell helpers
+  function put(col, row, r, g, b, lev, ch) {
+    if (col < 0 || row < 0 || col >= cols || row >= rows) return;
+    const i = row * cols + col;
+    if (lev >= LV[i] || ch) { R[i] = r; G[i] = g; B[i] = b; LV[i] = lev; DN[i] = Math.max(lev, 0.5); KD[i] = 0; CH[i] = ch || 0; }
+  }
+  function toCell(wx, wy) { return [Math.floor(wx * S / cwC), Math.floor((wy * S + top0) / chC)]; }
+  function disc(wx, wy, rad, r, g, b, lev, ch) {
+    const rc = Math.ceil(rad * S / cwC), rr = Math.ceil(rad * S / chC), [c0, r0] = toCell(wx, wy);
+    for (let dy = -rr; dy <= rr; dy++) for (let dx = -rc; dx <= rc; dx++) {
+      const x = ((c0 + dx + 0.5) * cwC) / S - wx, y = ((r0 + dy + 0.5) * chC - top0) / S - wy;
+      if (x * x + y * y <= rad * rad * 1.1) put(c0 + dx, r0 + dy, r, g, b, lev, ch);
+    }
+  }
+
+  // ---------- main scene fill
+  function moonState(t) {
+    const idx = state.moonIdx, k = ((t - state.moonStart) % 9999);
+    const total = Math.floor(k / 9) + idx, pos = k % 9;
+    const c0 = MOONS[total % MOONS.length], c1 = MOONS[(total + 1) % MOONS.length], f = sstep(7.2, 9, pos);
+    return { c: [mix(c0[0], c1[0], f), mix(c0[1], c1[1], f), mix(c0[2], c1[2], f)], c2: MOONS[(total + 3) % MOONS.length], phase: (0.40 + (t - state.moonStart) / 26) % 1 };
+  }
+
+  function fillScene(t) {
+    const cx = asp / 2, mo = moonState(t);
+    const mx = Math.max(0.2, asp * 0.17), my = 0.2, mr = 0.1;
+    const m2x = Math.min(asp - 0.1, cx + 0.45 + asp * 0.12), m2y = 0.09, m2r = 0.032;
+    const tb = Math.floor(t * 3);
+    const k = Math.cos(mo.phase * 6.2832), waxing = mo.phase < 0.5;
+    const starX = cx, starY = TOP - 0.04, starR = 0.042;
+    const tw = t * 2.4;
+    for (let row = 0; row < rows; row++) {
+      const wy = ((row + 0.5) * chC - top0) / S;
+      for (let col = 0; col < cols; col++) {
+        const i = row * cols + col, wx = (col + 0.5) * cwC / S;
+        let r, g, b, lev = 0, kd = 0, ch = 0, dn = -1;
+        // sky
+        const q = Math.pow(clamp((wy + 0.8) / 1.8, 0, 1), 1.6);
+        r = 0.01 + 0.04 * q; g = 0.015 + 0.095 * q; b = 0.05 + 0.21 * q;
+        if (state.aurora && wy < 0.55) {
+          const av = 0.5 + 0.5 * Math.sin(wx * 4.2 + t * 0.25 + 2 * Math.sin(wy * 2.5 - t * 0.15));
+          const bd = Math.exp(-Math.pow((wy - 0.10) / 0.24, 2));
+          const a = 0.5 * av * bd * (0.6 + 0.4 * Math.sin(wx * 1.7 - t * 0.2));
+          const mixv = 0.5 + 0.5 * Math.sin(wx * 2 + wy * 3);
+          r += a * (0.15 + 0.5 * mixv) * 0.7; g += a * (0.95 - 0.35 * mixv) * 0.7; b += a * (0.55 + 0.4 * mixv) * 0.7;
+          lev = a * 0.38; dn = 0.1;
+        }
+        // stars
+        if (wy < 0.72) {
+          const hs = h2(col, row * 7 + 3);
+          if (hs < 0.028) {
+            const tt = 0.5 + 0.5 * Math.sin(t * (1 + hs * 60) + hs * 100);
+            if (0.35 + 0.65 * tt > lev) {
+              lev = 0.35 + 0.65 * tt; dn = -1; const warm = h2(col * 3, row);
+              r = 0.8 + 0.2 * warm; g = 0.85 + 0.1 * warm; b = 1 - 0.3 * warm; ch = tt > 0.85 ? 42 : tt > 0.5 ? 43 : 46;
+            }
+          }
+        }
+        // moons
+        { const dx = wx - mx, dy = wy - my, d = Math.sqrt(dx * dx + dy * dy);
+          if (d < mr * 2.2) {
+            const gl = 0.55 * Math.exp(-Math.max(0, d - mr) / (mr * 0.7));
+            r += mo.c[0] * gl * 0.8; g += mo.c[1] * gl * 0.8; b += mo.c[2] * gl * 0.8; lev = Math.max(lev, gl * 0.85); dn = Math.min(0.22, gl * 0.4);
+            if (d < mr) {
+              const xn = dx / mr, yn = dy / mr, s = Math.sqrt(Math.max(0, 1 - yn * yn));
+              const lit = waxing ? xn > k * s : xn < -k * s;
+              const crater = 0.45 + 0.75 * vn(xn * 3.2 + 7, yn * 3.2) * (0.5 + 0.7 * vn(xn * 9, yn * 9));
+              if (lit) { r = mo.c[0] * crater; g = mo.c[1] * crater; b = mo.c[2] * crater; lev = 0.6 + 0.35 * crater; dn = 0.95; }
+              else { r = mo.c[0] * 0.2; g = mo.c[1] * 0.2; b = mo.c[2] * 0.25; lev = 0.3; dn = 0.45; }
+              ch = 0;
+            }
+          }
+          const ex = wx - m2x, ey = wy - m2y, e = Math.sqrt(ex * ex + ey * ey);
+          if (e < m2r * 2.4) {
+            const gl = 0.5 * Math.exp(-Math.max(0, e - m2r) / (m2r * 0.8));
+            r += mo.c2[0] * gl * 0.7; g += mo.c2[1] * gl * 0.7; b += mo.c2[2] * gl * 0.7; lev = Math.max(lev, gl * 0.8); dn = Math.min(0.22, gl * 0.5);
+            if (e < m2r) { const cr = 0.7 + 0.5 * vn(ex * 90, ey * 90); r = mo.c2[0] * cr; g = mo.c2[1] * cr; b = mo.c2[2] * cr; lev = 0.9; dn = 0.95; ch = 0; }
+          }
+        }
+        // forest, back layer
+        { const f = wx * 17 + 3, fi = Math.floor(f), ff = f - fi, tri = Math.abs(ff - 0.5) * 2;
+          const hh = 0.13 + 0.09 * h2(fi, 11), topY = 0.60 - 0.05 * h2(fi, 5) + tri * hh + 0.012 * Math.sin(ff * 34) * tri;
+          if (wy > topY) {
+            const dd = wy - topY, sh = 1 - clamp(dd / 0.28, 0, 1) * 0.5;
+            if (dd < 0.012) { r = 0.45; g = 0.6; b = 0.9; lev = 0.7; }
+            else { r = 0.05 * sh; g = 0.13 * sh; b = 0.34 * sh; lev = 0.3 + 0.12 * vn(wx * 60, wy * 90); }
+            dn = 0.9; kd = 1; ch = 0;
+          } }
+        // forest, mid layer
+        { const f = wx * 11 + 8, fi = Math.floor(f), ff = f - fi, tri = Math.abs(ff - 0.5) * 2;
+          const hh = 0.15 + 0.1 * h2(fi, 21), topY = 0.675 - 0.05 * h2(fi, 9) + tri * hh + 0.014 * Math.sin(ff * 30) * tri;
+          if (wy > topY) {
+            const dd = wy - topY, sh = 1 - clamp(dd / 0.25, 0, 1) * 0.45;
+            if (dd < 0.014) { r = 0.6; g = 0.75; b = 1; lev = 0.78; }
+            else { r = 0.06 * sh; g = 0.2 * sh; b = 0.5 * sh; lev = 0.46 + 0.18 * vn(wx * 55, wy * 80); }
+            dn = 0.9; kd = 1; ch = 0;
+          } }
+        // snowy ground
+        const gy = 0.80 + 0.018 * Math.sin(wx * 3 + 0.5) + 0.012 * Math.sin(wx * 8 + 1);
+        if (wy > gy) {
+          const dd = clamp((wy - gy) / 0.2, 0, 1), nz = vn(wx * 45, wy * 70);
+          r = mix(0.12, 0.34, dd) + 0.06 * nz; g = mix(0.27, 0.5, dd) + 0.06 * nz; b = mix(0.56, 0.8, dd);
+          lev = 0.5 + 0.3 * nz; dn = 0.72 + 0.2 * nz; kd = 1; ch = 0;
+          if (h2(col + (tb * 31 | 0), row * 13) < 0.025) { r = g = b = 0.95; lev = 0.95; dn = 0.95; ch = 46; }
+        }
+        // tree
+        if (wy > TOP - 0.003 && wy < BOT + 0.002) {
+          const tt = (wy - TOP) / (BOT - TOP), w = hw(clamp(tt, 0, 1)) * (0.94 + 0.12 * h2(row, 77)), dxt = Math.abs(wx - cx);
+          if (dxt < w) {
+            const f = tierF(tt), left = clamp(0.5 + 0.5 * (cx - wx) / w, 0, 1);
+            const sh = (0.5 + 0.5 * f) * (0.65 + 0.45 * left) * (0.75 + 0.5 * vn(wx * 90, wy * 140));
+            r = 0.04 + 0.12 * sh; g = 0.28 + 0.7 * sh; b = 0.1 + 0.22 * sh; lev = 0.62 + 0.32 * sh; dn = 0.95; kd = 2; ch = 0;
+            if (f < 0.16 && h2(col, row + 5) > 0.7) { r = g = b = 0.88; lev = 0.95; dn = 0.95; }
+          }
+        }
+        if (wy >= BOT && wy < BOT + 0.07 && Math.abs(wx - cx) < 0.024) { r = 0.42; g = 0.23; b = 0.1; lev = 0.6 + 0.2 * vn(wx * 80, wy * 80); dn = 0.95; kd = 2; ch = 0; }
+        // gifts
+        for (let gi = 0; gi < GIFTS.length; gi++) {
+          const G0 = GIFTS[gi], gx = cx + G0.dx, x0 = gx - G0.w / 2, y0 = G0.y - G0.h;
+          if (wx >= x0 && wx <= x0 + G0.w && wy >= y0 && wy <= G0.y) {
+            const fx = (wx - x0) / G0.w, fy = (wy - y0) / G0.h, rib = Math.abs(fx - 0.5) < 0.09 || Math.abs(fy - 0.35) < 0.08;
+            const c = rib ? G0.r : G0.b, shd = 0.75 + 0.3 * (1 - fy) + 0.15 * vn(wx * 120, wy * 120);
+            r = c[0] * shd; g = c[1] * shd; b = c[2] * shd; lev = 0.85; dn = 0.95; kd = 2; ch = 0;
+          }
+          const bx = wx - gx, by = wy - (y0 - 0.008);
+          if (bx * bx / 0.00018 + by * by / 0.00008 < 1) { r = G0.r[0]; g = G0.r[1]; b = G0.r[2]; lev = 0.95; dn = 0.95; kd = 2; ch = 0; }
+        }
+        // star on top: glow, then the star itself
+        { const dx = wx - starX, dy = wy - starY, d = Math.sqrt(dx * dx + dy * dy);
+          if (d < 0.2) {
+            const pulse = 0.8 + 0.2 * Math.sin(t * 3);
+            const gl = 0.65 * Math.exp(-d * d / (2 * 0.05 * 0.05)) * pulse + 0.35 * Math.exp(-Math.min(Math.abs(dx), Math.abs(dy) * 2.2) / 0.012) * Math.exp(-d / 0.11) * pulse;
+            r += 1 * gl; g += 0.78 * gl; b += 0.28 * gl; lev = Math.max(lev, gl * 0.9); dn = Math.max(dn < 0 ? 0 : dn, Math.min(0.5, gl)); if (gl > 0.2) kd = 0;
+            const ang = Math.atan2(dy, dx) + Math.PI / 2, rs = starR * (0.42 + 0.58 * Math.pow(Math.abs(Math.cos(2.5 * ang)), 0.8));
+            if (d < rs) { r = 1; g = 0.85 + 0.1 * Math.sin(t * 4 + d * 80); b = 0.35; lev = 1; dn = 1; ch = 0; kd = 2; }
+          } }
+        R[i] = r; G[i] = g; B[i] = b; LV[i] = lev; DN[i] = dn < 0 ? lev : dn; KD[i] = kd; CH[i] = ch;
+      }
+    }
+    // baubles
+    for (const o of baubles) {
+      const w = hw(o.t), x = cx + o.u * w, y = TOP + o.t * (BOT - TOP), bl = 0.8 + 0.2 * Math.sin(t * 2 + o.ph);
+      disc(x, y, o.r, o.c[0] * bl, o.c[1] * bl, o.c[2] * bl, 1, 0);
+    }
+    // string lights (chasing blink)
+    for (const L of lights) {
+      const w = hw(L.t), x = cx + Math.sin(L.t * 13 + L.g * 2.1) * w * 0.85, y = TOP + (L.t + 0.02 * L.g) * (BOT - TOP);
+      const c = LIGHTS[(L.k + L.g) % 5], on = 0.5 + 0.5 * Math.sin(t * 3 + L.k * 0.8 + L.g * 1.6);
+      if (on > 0.25) { const [c0, r0] = toCell(x, y); put(c0, r0, c[0], c[1], c[2], 0.7 + 0.3 * on, on > 0.7 ? 64 : 111); if (on > 0.8) { put(c0 + 1, r0, c[0] * .6, c[1] * .6, c[2] * .6, 0.5, 0); put(c0 - 1, r0, c[0] * .6, c[1] * .6, c[2] * .6, 0.5, 0); } }
+    }
+  }
+
+  function addSnow(t, dt) {
+    const w = state.wind * 0.12, count = Math.round(flakes.length * state.snow);
+    for (let i = 0; i < flakes.length; i++) {
+      const f = flakes[i];
+      f.y += (0.045 + 0.1 * f.z) * dt; f.x += (w * f.z + 0.018 * Math.sin(t * 0.9 + f.ph)) * dt;
+      if (f.y > 1.02) { f.y = -0.95 - Math.random() * 0.1; f.x = Math.random() * asp * 1.2 - 0.1 * asp; }
+      if (f.x > asp * 1.1) f.x -= asp * 1.2; if (f.x < -0.1 * asp) f.x += asp * 1.2;
+      if (i >= count) continue;
+      const [c, r] = toCell(f.x, f.y), v = 0.55 + 0.45 * f.z;
+      put(c, r, v, v, 1, 0.6 + 0.4 * f.z, f.z > 0.9 ? 42 : f.z > 0.72 ? 43 : f.z > 0.45 ? 44 : 46);
+    }
+  }
+
+  function addFireworks(t) {
+    for (let bi = bursts.length - 1; bi >= 0; bi--) {
+      const b = bursts[bi], age = t - b.t0;
+      if (age < b.rocket) {
+        const p = age / b.rocket, y = mix(1.0 + (top0 > 0 ? 0 : 0), b.y, 1 - Math.pow(1 - p, 2)), x = b.x + 0.02 * Math.sin(p * 9);
+        const [c, r] = toCell(x, y); put(c, r, 1, 0.9, 0.6, 1, 124); put(c, r + 1, 1, .6, .3, .6, 46); put(c, r + 2, 1, .5, .2, .35, 46);
+        continue;
+      }
+      const a = age - b.rocket;
+      if (a > 2.3) { bursts.splice(bi, 1); continue; }
+      const fade = 1 - a / 2.3, grav = 0.1 * a * a;
+      for (let i = 0; i < b.n; i++) {
+        let dx, dy; const th = (i / b.n) * 6.2832;
+        const sp = b.shape === 0 ? 0.17 + 0.16 * h2(i, 3) : 0.27;
+        if (b.shape === 2) { const s = Math.sin(th), hx = 16 * s * s * s, hy = -(13 * Math.cos(th) - 5 * Math.cos(2 * th) - 2 * Math.cos(3 * th) - Math.cos(4 * th)); dx = hx / 16 * 0.27; dy = hy / 16 * 0.27; }
+        else { dx = Math.cos(th + h2(i, 1)) * sp; dy = Math.sin(th + h2(i, 1)) * sp * (b.shape === 1 ? 1 : 0.95); }
+        const e = 1 - Math.pow(1 - clamp(a / 1.2, 0, 1), 2);
+        for (let tr = 0; tr < 3; tr++) {
+          const ee = Math.max(0, e - tr * 0.04), x = b.x + dx * ee * 1.2, y = b.y + dy * ee * 1.2 + (grav * (1 - tr * 0.1));
+          const [c, r] = toCell(x, y), col = (i % 3 === 0) ? b.color2 : b.color, v = fade * (1 - tr * 0.3);
+          if (v > 0.08) put(c, r, col[0] * v + 0.2 * v, col[1] * v + 0.2 * v, col[2] * v + 0.2 * v, 0.4 + 0.6 * v, tr === 0 ? (fade > 0.6 ? 42 : fade > 0.3 ? 43 : 46) : 46);
+        }
+      }
+    }
+  }
+
+  // ---------- drawing
+  const colorCache = new Map();
+  function css(r, g, b) { const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3); let s = colorCache.get(key); if (!s) { s = "rgb(" + (r & 0xF8) + "," + (g & 0xF8) + "," + (b & 0xF8) + ")"; colorCache.set(key, s); } return s; }
+
+  function draw(t) {
+    const W = cv.width, H = cv.height, cw = cwC * dpr, chh = chC * dpr;
+    const gr = ctx.createLinearGradient(0, 0, 0, H);
+    gr.addColorStop(0, "#03040c"); gr.addColorStop(0.55, "#060a1c"); gr.addColorStop(1, "#0a1636");
+    ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1; ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+    ctx.font = (fs * dpr).toFixed(1) + "px ui-monospace, Menlo, Consolas, 'DejaVu Sans Mono', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const tbk = Math.floor(t * 4); let last = "";
+    for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
+      const i = row * cols + col, lev = LV[i];
+      if (lev < 0.06 && !CH[i]) continue;
+      let r = R[i], g = G[i], b = B[i]; const m = Math.max(r, g, b); if (m < 0.004) continue;
+      const v = 0.26 + 0.74 * clamp(lev, 0, 1), k = Math.min(v / m, 4);
+      r = clamp(r * k, 0, 1) * 255 | 0; g = clamp(g * k, 0, 1) * 255 | 0; b = clamp(b * k, 0, 1) * 255 | 0;
+      const s = css(r, g, b); if (s !== last) { ctx.fillStyle = s; last = s; }
+      if (state.style === 1) { ctx.fillRect(col * cw, row * chh, cw * 0.92, chh * 0.92); continue; }
+      let c = CH[i];
+      if (c) ctx.fillText(String.fromCharCode(c), (col + 0.5) * cw, (row + 0.5) * chh);
+      else {
+        const dd = DN[i], idx = dd < 0.2 ? 0 : dd < 0.4 ? 1 : dd < 0.62 ? 2 : dd < 0.82 ? 3 : 4, chars = RAMP[idx];
+        const hv = h2(col + (KD[i] === 2 ? tbk * 17 : 0), row * 3 + idx);
+        ctx.fillText(chars[Math.floor(hv * chars.length)], (col + 0.5) * cw, (row + 0.5) * chh);
+      }
+    }
+    // cheap bloom: a small blurred copy added on top
+    octx.globalCompositeOperation = "copy"; octx.imageSmoothingEnabled = true; octx.drawImage(cv, 0, 0, off.width, off.height);
+    ctx.globalCompositeOperation = "lighter"; ctx.globalAlpha = 0.7; ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(off, 0, 0, W, H);
+    ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+  }
+
+  // ---------- loop
+  let prev = performance.now() / 1000, acc = 0, frames = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const t = now / 1000, dt = Math.min(0.1, t - prev); acc += dt; prev = t;
+    if (acc < 1 / 30 - 0.001) return;
+    const step = acc; acc = 0;
+    if (state.auto && !reduce && t - lastAuto > 4.5 + Math.random() * 2.5 && document.visibilityState === "visible") { lastAuto = t; launch(asp * (0.15 + 0.7 * Math.random()), 0.12 + 0.3 * Math.random()); }
+    fillScene(t); addSnow(t, step); addFireworks(t); draw(t); frames++;
+  }
+
+  // ---------- greetings and countdown
+  const GREET = [["С Новым годом!", "Happy New Year"], ["Жаңа жылыңызбен!", "Kazakh: Happy New Year"], ["新年快乐", "xīnnián kuàilè · Chinese"], ["Happy New Year!", "С Новым годом"], ["С Новым годом!", "Happy New Year"]];
+  let gi = 0;
+  setInterval(() => {
+    const el = $("hello"); el.style.opacity = 0;
+    setTimeout(() => { gi = (gi + 1) % (GREET.length - 1); $("hw").textContent = GREET[gi][0]; $("hs").textContent = GREET[gi][1]; el.style.opacity = 1; }, 600);
+  }, 4200);
+  function tick() {
+    const now = new Date(), y = now.getFullYear();
+    const celebrating = now.getMonth() === 0 && now.getDate() <= 7;
+    const target = new Date(celebrating ? y : y + 1, 0, 1, 0, 0, 0), ny = target.getFullYear();
+    if (celebrating) { $("count").innerHTML = "С Новым <b>" + ny + "</b> годом!"; return; }
+    let s = Math.max(0, Math.floor((target - now) / 1000));
+    const d = Math.floor(s / 86400); s -= d * 86400; const h = Math.floor(s / 3600); s -= h * 3600; const mi = Math.floor(s / 60); s -= mi * 60;
+    const p = n => String(n).padStart(2, "0");
+    $("count").innerHTML = "До " + ny + ": <b>" + d + " дн</b> " + p(h) + ":" + p(mi) + ":" + p(s);
+  }
+  tick(); setInterval(tick, 1000);
+
+  // ---------- controls
+  const status = msg => { $("status").textContent = msg; if (msg) setTimeout(() => { if ($("status").textContent === msg) $("status").textContent = ""; }, 4000); };
+  const wpos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / S, (e.clientY - r.top - top0) / S]; };
+  cv.addEventListener("pointerdown", e => { const [x, y] = wpos(e); launch(x, clamp(y, -0.3, 0.75)); $("hint").style.opacity = 0; });
+  $("boom").onclick = () => { for (let i = 0; i < 5; i++) setTimeout(() => launch(asp * (0.1 + 0.8 * Math.random()), 0.05 + 0.35 * Math.random()), i * 260); };
+  $("menu").onclick = () => { const p = $("panel"); const o = p.classList.toggle("open"); $("menu").setAttribute("aria-expanded", o); };
+  $("snow").oninput = e => state.snow = e.target.value / 100;
+  $("wind").oninput = e => state.wind = e.target.value / 100 * 3;
+  $("style").onchange = e => state.style = +e.target.value;
+  $("aurora").onchange = e => state.aurora = +e.target.value;
+  $("moon").onclick = () => { state.moonIdx = (state.moonIdx + 1) % MOONS.length; state.moonStart = performance.now() / 1000 - 0.01; };
+  $("auto").onclick = e => { state.auto = !state.auto; e.target.textContent = "Auto fireworks: " + (state.auto ? "on" : "off"); };
+  $("clean").onclick = () => { document.body.classList.add("hide-ui"); };
+  document.addEventListener("keydown", e => { if (e.key === "h" || e.key === "H" || e.key === "Escape") document.body.classList.toggle("hide-ui"); if (e.code === "Space") { e.preventDefault(); $("boom").click(); } });
+  document.addEventListener("dblclick", () => document.body.classList.remove("hide-ui"));
+  $("save").onclick = () => { cv.toBlob(b => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "winter-night.png"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); status("Image saved"); }, "image/png"); };
+  $("rec").onclick = () => {
+    if (!cv.captureStream || !window.MediaRecorder) { status("Video recording is not supported in this browser"); return; }
+    const types = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"]; const mt = types.find(t => MediaRecorder.isTypeSupported(t));
+    const rec = new MediaRecorder(cv.captureStream(30), mt ? { mimeType: mt, videoBitsPerSecond: 6e6 } : {}), parts = [];
+    rec.ondataavailable = e => e.data.size && parts.push(e.data);
+    rec.onstop = () => { const ext = (rec.mimeType || "video/webm").indexOf("mp4") >= 0 ? "mp4" : "webm"; const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(parts, { type: rec.mimeType })); a.download = "winter-night." + ext; document.body.appendChild(a); a.click(); a.remove(); status("Video saved"); $("rec").disabled = false; };
+    rec.start(); $("rec").disabled = true; let s = 10; status("Recording… " + s + " s");
+    const iv = setInterval(() => { s--; if (s <= 0) { clearInterval(iv); rec.stop(); } else status("Recording… " + s + " s"); }, 1000);
+  };
+  setTimeout(() => { $("hint").style.opacity = 0; }, 7000);
+
+  window.addEventListener("resize", resize);
+  resize(); requestAnimationFrame(frame);
+  window.__scene = { state, launch: (x, y) => launch(x, y), frames: () => frames, dims: () => ({ cols, rows, asp, S }) };
+})();
+</script>
+</body>
+</html>
